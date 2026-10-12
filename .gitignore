@@ -1,0 +1,6 @@
+/target
+/build
+/.flatpak-builder
+*.swp
+.DS_Store
+/build-flatpak

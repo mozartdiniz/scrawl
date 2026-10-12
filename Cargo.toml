@@ -1,0 +1,23 @@
+[package]
+name = "scrawl"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.83"
+description = "Image preview and markup for Linux, in the spirit of macOS Preview"
+license = "MIT"
+repository = "https://github.com/mozartdiniz/scrawl"
+keywords = ["gtk", "annotation", "markup", "screenshot", "image"]
+categories = ["multimedia::images", "gui"]
+
+[dependencies]
+anyhow = "1.0"
+log = "0.4"
+pretty_env_logger = "0.5"
+gtk = { package = "gtk4", version = "0.10", features = ["gnome_46"] }
+adw = { package = "libadwaita", version = "0.8", features = ["v1_5"] }
+pangocairo = "0.21"
+# PNG export goes through cairo directly; gtk4 builds cairo-rs without it.
+cairo-rs = { version = "0.21", features = ["png"] }
+
+[build-dependencies]
+glib-build-tools = "0.20"

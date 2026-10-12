@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gresources>
+  <gresource prefix="/io/github/mozartdiniz/Scrawl/icons/scalable/actions">
+    <file preprocess="xml-stripblanks" alias="scrawl-select-symbolic.svg">icons/scalable/actions/scrawl-select-symbolic.svg</file>
+    <file preprocess="xml-stripblanks" alias="scrawl-arrow-symbolic.svg">icons/scalable/actions/scrawl-arrow-symbolic.svg</file>
+    <file preprocess="xml-stripblanks" alias="scrawl-line-symbolic.svg">icons/scalable/actions/scrawl-line-symbolic.svg</file>
+    <file preprocess="xml-stripblanks" alias="scrawl-rectangle-symbolic.svg">icons/scalable/actions/scrawl-rectangle-symbolic.svg</file>
+    <file preprocess="xml-stripblanks" alias="scrawl-oval-symbolic.svg">icons/scalable/actions/scrawl-oval-symbolic.svg</file>
+    <file preprocess="xml-stripblanks" alias="scrawl-pen-symbolic.svg">icons/scalable/actions/scrawl-pen-symbolic.svg</file>
+    <file preprocess="xml-stripblanks" alias="scrawl-highlight-symbolic.svg">icons/scalable/actions/scrawl-highlight-symbolic.svg</file>
+    <file preprocess="xml-stripblanks" alias="scrawl-text-symbolic.svg">icons/scalable/actions/scrawl-text-symbolic.svg</file>
+    <file preprocess="xml-stripblanks" alias="scrawl-redact-symbolic.svg">icons/scalable/actions/scrawl-redact-symbolic.svg</file>
+    <file preprocess="xml-stripblanks" alias="scrawl-crop-symbolic.svg">icons/scalable/actions/scrawl-crop-symbolic.svg</file>
+    <file preprocess="xml-stripblanks" alias="scrawl-sketch-symbolic.svg">icons/scalable/actions/scrawl-sketch-symbolic.svg</file>
+    <file preprocess="xml-stripblanks" alias="scrawl-rounded-rect-symbolic.svg">icons/scalable/actions/scrawl-rounded-rect-symbolic.svg</file>
+    <file preprocess="xml-stripblanks" alias="scrawl-bubble-symbolic.svg">icons/scalable/actions/scrawl-bubble-symbolic.svg</file>
+    <file preprocess="xml-stripblanks" alias="scrawl-star-symbolic.svg">icons/scalable/actions/scrawl-star-symbolic.svg</file>
+    <file preprocess="xml-stripblanks" alias="scrawl-polygon-symbolic.svg">icons/scalable/actions/scrawl-polygon-symbolic.svg</file>
+    <file preprocess="xml-stripblanks" alias="scrawl-resize-symbolic.svg">icons/scalable/actions/scrawl-resize-symbolic.svg</file>
+  </gresource>
+</gresources>

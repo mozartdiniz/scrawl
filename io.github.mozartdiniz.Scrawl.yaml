@@ -1,0 +1,38 @@
+# Flatpak manifest. Generate cargo-sources.json first (the build is offline, see README):
+#   python3 flatpak-cargo-generator.py Cargo.lock -o cargo-sources.json
+app-id: io.github.mozartdiniz.Scrawl
+runtime: org.gnome.Platform
+runtime-version: '49'
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: scrawl
+
+finish-args:
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --share=ipc               # required for X11
+  - --device=dri              # GPU acceleration
+  # No filesystem access needed: files come through the portal file chooser
+  # and drag-and-drop.
+
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+  env:
+    CARGO_HOME: /run/build/scrawl/cargo
+    RUST_BACKTRACE: '1'
+
+modules:
+  - name: scrawl
+    buildsystem: simple
+    build-commands:
+      - cargo --offline fetch --manifest-path Cargo.toml --verbose
+      - cargo --offline build --release --verbose
+      - install -Dm755 target/release/scrawl -t /app/bin/
+      - install -Dm644 data/io.github.mozartdiniz.Scrawl.desktop -t /app/share/applications/
+      - install -Dm644 data/io.github.mozartdiniz.Scrawl.metainfo.xml -t /app/share/metainfo/
+      - install -Dm644 data/icons/hicolor/scalable/apps/io.github.mozartdiniz.Scrawl.svg -t /app/share/icons/hicolor/scalable/apps/
+    sources:
+      - type: dir
+        path: .
+      - cargo-sources.json
