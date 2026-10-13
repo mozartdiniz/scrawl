@@ -29,6 +29,18 @@ impl Point {
         let (dx, dy) = (self.x - center.x, self.y - center.y);
         Self::new(center.x + dx * cos - dy * sin, center.y + dx * sin + dy * cos)
     }
+
+    /// Where this point lands when a `w`×`h` image is turned a quarter
+    /// clockwise (or counter-clockwise): rotated, then moved back to
+    /// positive coordinates, like AnnotationKit's
+    /// `affineTransformRecenteringAboutOriginForExifOrientation:withOriginalSize:`.
+    pub fn quarter_turn(self, clockwise: bool, w: f64, h: f64) -> Self {
+        if clockwise {
+            Self::new(h - self.y, self.x)
+        } else {
+            Self::new(self.y, w - self.x)
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -101,6 +113,20 @@ impl Rect {
 
     pub fn clamp_point(&self, p: Point) -> Point {
         Point::new(p.x.clamp(self.x, self.right()), p.y.clamp(self.y, self.bottom()))
+    }
+
+    /// Bounds of the rectangle after `Point::quarter_turn`; width and
+    /// height swap.
+    pub fn quarter_turn(&self, clockwise: bool, w: f64, h: f64) -> Self {
+        let [a, _, b, _] = self.corners();
+        Self::from_points(a.quarter_turn(clockwise, w, h), b.quarter_turn(clockwise, w, h))
+    }
+
+    /// Same center, width and height swapped: the rect a box shape had
+    /// before an odd number of quarter turns.
+    pub fn transposed(&self) -> Self {
+        let c = self.center();
+        Self::new(c.x - self.h / 2.0, c.y - self.w / 2.0, self.h, self.w)
     }
 }
 
@@ -281,6 +307,26 @@ impl Shape {
             _ => unreachable!("box shapes handled above"),
         }
     }
+
+    /// Follow the image through a quarter turn (see `Point::quarter_turn`).
+    /// Text is left alone: it turns about its laid-out center, which only
+    /// the renderer can measure (`Editor::rotate_image` does it).
+    pub fn quarter_turn(&mut self, clockwise: bool, w: f64, h: f64) {
+        let turn = |p: &mut Point| *p = p.quarter_turn(clockwise, w, h);
+        if let Some(r) = self.rect_mut() {
+            *r = r.quarter_turn(clockwise, w, h);
+            return;
+        }
+        match self {
+            Shape::Line { start, end } => {
+                turn(start);
+                turn(end);
+            }
+            Shape::Pen(points) => points.iter_mut().for_each(turn),
+            Shape::Text { .. } => {}
+            _ => unreachable!("box shapes handled above"),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -288,6 +334,12 @@ pub struct Annotation {
     pub id: u64,
     pub shape: Shape,
     pub style: Style,
+    /// Clockwise quarter turns the image has had since this was drawn
+    /// (AnnotationKit's `originalExifOrientation`). A box shape's rect is
+    /// always in current image coordinates, but its content is drawn the
+    /// way it was laid out and turned by this much, so a speech bubble's
+    /// tail or a star's points rotate with the image.
+    pub turns: u8,
 }
 
 #[cfg(test)]
@@ -305,6 +357,19 @@ mod tests {
         let a = Rect::new(0.0, 0.0, 10.0, 10.0);
         assert!(a.intersect(&Rect::new(20.0, 20.0, 5.0, 5.0)).is_none());
         assert_eq!(a.intersect(&Rect::new(5.0, 5.0, 10.0, 10.0)), Some(Rect::new(5.0, 5.0, 5.0, 5.0)));
+    }
+
+    #[test]
+    fn quarter_turns_map_corners_and_undo_each_other() {
+        // A 40×30 image: its top-left corner goes top-right when turned
+        // clockwise and bottom-left when turned counter-clockwise.
+        assert_eq!(Point::new(0.0, 0.0).quarter_turn(true, 40.0, 30.0), Point::new(30.0, 0.0));
+        assert_eq!(Point::new(0.0, 0.0).quarter_turn(false, 40.0, 30.0), Point::new(0.0, 40.0));
+
+        let r = Rect::new(5.0, 2.0, 10.0, 4.0);
+        let turned = r.quarter_turn(true, 40.0, 30.0);
+        assert_eq!(turned, Rect::new(24.0, 5.0, 4.0, 10.0));
+        assert_eq!(turned.quarter_turn(false, 30.0, 40.0), r);
     }
 
     #[test]

@@ -21,6 +21,9 @@ const HIT_SLOP: f64 = 6.0;
 const HANDLE_RADIUS: f64 = 5.0;
 const MIN_ZOOM: f64 = 0.05;
 const MAX_ZOOM: f64 = 16.0;
+/// Stops for the zoom buttons and shortcuts, so the label reads cleanly.
+const ZOOM_STEPS: [f64; 17] =
+    [0.05, 0.1, 0.25, 0.33, 0.5, 0.67, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0];
 
 // Toolbar order follows Preview: Sketch, Draw, Shapes ▾, Text, …
 const LEADING_TOOLS: [(Tool, &str, &str); 3] = [
@@ -99,7 +102,9 @@ struct Inner {
     toasts: adw::ToastOverlay,
     stack: gtk::Stack,
     markup_bar: gtk::Box,
+    scroller: gtk::ScrolledWindow,
     area: gtk::DrawingArea,
+    zoom_label: gtk::Label,
     controls: Controls,
     text_popover: gtk::Popover,
     text_view: gtk::TextView,
@@ -107,6 +112,13 @@ struct Inner {
     editor: RefCell<Option<Editor>>,
     /// `None` fits the image to the window.
     zoom: Cell<Option<f64>>,
+    /// Model point to bring back under a viewport position (x, y) once the
+    /// canvas has been resized for a new zoom.
+    zoom_anchor: Cell<Option<(Point, f64, f64)>>,
+    /// Pointer position over the canvas, the anchor for Ctrl+scroll.
+    pointer: Cell<Option<(f64, f64)>>,
+    /// Scale when a pinch began.
+    pinch_start: Cell<f64>,
     /// Guards control signal handlers while the toolbar mirrors the model.
     syncing: Cell<bool>,
     drag_origin: Cell<(f64, f64)>,
@@ -143,6 +155,20 @@ impl ScrawlWindow {
         undo_box.append(&redo);
         header.pack_start(&undo_box);
 
+        let rotate_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        rotate_box.add_css_class("linked");
+        rotate_box.append(&icon_button(
+            "scrawl-rotate-left-symbolic",
+            "Rotate Left (Ctrl+L)",
+            "win.rotate-left",
+        ));
+        rotate_box.append(&icon_button(
+            "scrawl-rotate-right-symbolic",
+            "Rotate Right (Ctrl+R)",
+            "win.rotate-right",
+        ));
+        header.pack_start(&rotate_box);
+
         let menu = gio::Menu::new();
         let file_section = gio::Menu::new();
         file_section.append(Some("Save"), Some("win.save"));
@@ -150,8 +176,12 @@ impl ScrawlWindow {
         file_section.append(Some("Copy Image"), Some("win.copy"));
         file_section.append(Some("New from Clipboard"), Some("win.paste"));
         menu.append_section(None, &file_section);
+        let image_section = gio::Menu::new();
+        image_section.append(Some("Rotate Left"), Some("win.rotate-left"));
+        image_section.append(Some("Rotate Right"), Some("win.rotate-right"));
+        image_section.append(Some("Adjust Size…"), Some("win.adjust-size"));
+        menu.append_section(None, &image_section);
         let arrange = gio::Menu::new();
-        arrange.append(Some("Adjust Size…"), Some("win.adjust-size"));
         arrange.append(Some("Duplicate"), Some("win.duplicate"));
         arrange.append(Some("Bring to Front"), Some("win.front"));
         arrange.append(Some("Send to Back"), Some("win.back"));
@@ -172,6 +202,21 @@ impl ScrawlWindow {
         header.pack_end(&share);
         let save = icon_button("document-save-symbolic", "Save (Ctrl+S)", "win.save");
         header.pack_end(&save);
+
+        // Zoom: out, the current level (click to toggle Actual Size / Fit), in.
+        let zoom_label = gtk::Label::builder().label("100%").width_chars(5).build();
+        zoom_label.add_css_class("numeric");
+        let zoom_level = gtk::Button::builder()
+            .child(&zoom_label)
+            .tooltip_text("Actual Size (Ctrl+1) / Zoom to Fit (Ctrl+0)")
+            .action_name("win.zoom-toggle")
+            .build();
+        let zoom_box = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        zoom_box.add_css_class("linked");
+        zoom_box.append(&icon_button("scrawl-zoom-out-symbolic", "Zoom Out (Ctrl+−)", "win.zoom-out"));
+        zoom_box.append(&zoom_level);
+        zoom_box.append(&icon_button("scrawl-zoom-in-symbolic", "Zoom In (Ctrl++)", "win.zoom-in"));
+        header.pack_end(&zoom_box);
 
         let (markup_bar, controls) = build_markup_bar();
 
@@ -255,12 +300,17 @@ impl ScrawlWindow {
                 toasts,
                 stack,
                 markup_bar,
+                scroller,
                 area,
+                zoom_label,
                 controls,
                 text_popover,
                 text_view,
                 editor: RefCell::new(None),
                 zoom: Cell::new(None),
+                zoom_anchor: Cell::new(None),
+                pointer: Cell::new(None),
+                pinch_start: Cell::new(1.0),
                 syncing: Cell::new(false),
                 drag_origin: Cell::new((0.0, 0.0)),
                 editing_text: Cell::new(None),
@@ -336,7 +386,6 @@ impl ScrawlWindow {
         inner.stack.set_visible_child_name("canvas");
         inner.markup_bar.set_visible(true);
         self.select_tool(Tool::Arrow);
-        self.update_content_size();
         self.refresh();
         inner.area.grab_focus();
     }
@@ -394,18 +443,74 @@ impl ScrawlWindow {
                 area.set_content_height(0);
             }
         }
+        self.update_zoom_label();
         area.queue_draw();
     }
 
-    fn set_zoom(&self, zoom: Option<f64>) {
-        self.inner.zoom.set(zoom.map(|z| z.clamp(MIN_ZOOM, MAX_ZOOM)));
-        self.update_content_size();
+    fn update_zoom_label(&self) {
+        let label = self.view().map(|v| format!("{:.0}%", v.scale * 100.0)).unwrap_or_default();
+        self.inner.zoom_label.set_label(&label);
     }
 
-    fn zoom_by(&self, factor: f64) {
-        if let Some(view) = self.view() {
-            self.set_zoom(Some(view.scale * factor));
+    /// Zoom around the middle of the viewport.
+    fn set_zoom(&self, zoom: Option<f64>) {
+        self.zoom_at(zoom, None);
+    }
+
+    /// Zoom (`None` fits) keeping whatever is under `anchor`, in canvas
+    /// coordinates, in place on screen.
+    fn zoom_at(&self, zoom: Option<f64>, anchor: Option<(f64, f64)>) {
+        let inner = &self.inner;
+        let zoom = zoom.map(|z| z.clamp(MIN_ZOOM, MAX_ZOOM));
+        let (h, v) = (inner.scroller.hadjustment(), inner.scroller.vadjustment());
+        let pinned = self.view().zip(zoom).map(|(view, _)| {
+            let (x, y) = anchor.unwrap_or((h.value() + h.page_size() / 2.0, v.value() + v.page_size() / 2.0));
+            (view.to_model(x, y), x - h.value(), y - v.value())
+        });
+        inner.zoom_anchor.set(pinned);
+        inner.zoom.set(zoom);
+        self.update_content_size();
+
+        // The scroll range only grows once the canvas is reallocated, so the
+        // anchor is normally restored from the `resize` handler. When the
+        // canvas keeps its size there is no resize: restore it now.
+        let area = &inner.area;
+        let width = area.content_width().max(inner.scroller.width());
+        let height = area.content_height().max(inner.scroller.height());
+        if (width, height) == (area.width(), area.height()) {
+            self.restore_zoom_anchor();
         }
+    }
+
+    fn restore_zoom_anchor(&self) {
+        let Some((model, vx, vy)) = self.inner.zoom_anchor.take() else { return };
+        let Some(view) = self.view() else { return };
+        let (x, y) = view.to_widget(model);
+        self.inner.scroller.hadjustment().set_value(x - vx);
+        self.inner.scroller.vadjustment().set_value(y - vy);
+    }
+
+    fn zoom_by(&self, factor: f64, anchor: Option<(f64, f64)>) {
+        if let Some(view) = self.view() {
+            self.zoom_at(Some(view.scale * factor), anchor);
+        }
+    }
+
+    /// Zoom In / Zoom Out: go to the next stop in `ZOOM_STEPS`.
+    fn zoom_step(&self, inward: bool) {
+        let Some(scale) = self.view().map(|v| v.scale) else { return };
+        let next = if inward {
+            ZOOM_STEPS.iter().find(|&&z| z > scale * 1.01)
+        } else {
+            ZOOM_STEPS.iter().rev().find(|&&z| z < scale / 1.01)
+        };
+        self.set_zoom(Some(next.copied().unwrap_or(scale)));
+    }
+
+    /// The zoom label's click: Actual Size, or back to Fit from there.
+    fn toggle_actual_size(&self) {
+        let actual = self.inner.zoom.get() == Some(1.0);
+        self.set_zoom(if actual { None } else { Some(1.0) });
     }
 
     fn draw(&self, cr: &cairo::Context) {
@@ -504,19 +609,50 @@ impl ScrawlWindow {
         });
         area.add_controller(click);
 
+        // Once a zoom has resized the canvas, scroll the anchor back into place.
+        let f = self.bind(|this, ()| {
+            this.restore_zoom_anchor();
+            this.update_zoom_label();
+        });
+        area.connect_resize(move |_, _, _| f(()));
+
+        let motion = gtk::EventControllerMotion::new();
+        let f = self.bind(|this, (x, y)| this.inner.pointer.set(Some((x, y))));
+        motion.connect_motion(move |_, x, y| f((x, y)));
+        let f = self.bind(|this, ()| this.inner.pointer.set(None));
+        motion.connect_leave(move |_| f(()));
+        area.add_controller(motion);
+
+        // Ctrl+wheel or touchpad scroll zooms around the pointer.
         let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
         let weak = self.weak();
         scroll.connect_scroll(move |controller, _, dy| {
             let ctrl = controller.current_event_state().contains(gdk::ModifierType::CONTROL_MASK);
             match Self::from_weak(&weak) {
                 Some(this) if ctrl => {
-                    this.zoom_by(if dy < 0.0 { 1.1 } else { 1.0 / 1.1 });
+                    // One wheel click is dy = ±1; smooth scrolling sends fractions.
+                    let factor = 1.1f64.powf(-dy.clamp(-3.0, 3.0));
+                    this.zoom_by(factor, this.inner.pointer.get());
                     glib::Propagation::Stop
                 }
                 _ => glib::Propagation::Proceed,
             }
         });
         area.add_controller(scroll);
+
+        // Pinch to zoom, around the fingers.
+        let pinch = gtk::GestureZoom::new();
+        let f = self.bind(|this, ()| {
+            if let Some(view) = this.view() {
+                this.inner.pinch_start.set(view.scale);
+            }
+        });
+        pinch.connect_begin(move |_, _| f(()));
+        let f = self.bind(|this, (scale, center): (f64, Option<(f64, f64)>)| {
+            this.zoom_at(Some(this.inner.pinch_start.get() * scale), center);
+        });
+        pinch.connect_scale_changed(move |gesture, scale| f((scale, gesture.bounding_box_center())));
+        area.add_controller(pinch);
 
         let keys = gtk::EventControllerKey::new();
         let weak = self.weak();
@@ -904,10 +1040,13 @@ impl ScrawlWindow {
         add("duplicate", |this| this.edit(Editor::duplicate_selected));
         add("front", |this| this.edit(Editor::bring_to_front));
         add("back", |this| this.edit(Editor::send_to_back));
-        add("zoom-in", |this| this.zoom_by(1.25));
-        add("zoom-out", |this| this.zoom_by(0.8));
+        add("zoom-in", |this| this.zoom_step(true));
+        add("zoom-out", |this| this.zoom_step(false));
         add("zoom-fit", |this| this.set_zoom(None));
         add("zoom-actual", |this| this.set_zoom(Some(1.0)));
+        add("zoom-toggle", Self::toggle_actual_size);
+        add("rotate-left", |this| this.rotate(false));
+        add("rotate-right", |this| this.rotate(true));
         add("keep-sketch", |this| this.edit(Editor::keep_sketch));
         add("adjust-size", Self::adjust_size);
     }
@@ -941,9 +1080,19 @@ impl ScrawlWindow {
             None => (false, false, false, false, false, None),
         };
         let has_doc = size.is_some();
-        for name in
-            ["save", "save-as", "copy", "adjust-size", "zoom-in", "zoom-out", "zoom-fit", "zoom-actual"]
-        {
+        for name in [
+            "save",
+            "save-as",
+            "copy",
+            "adjust-size",
+            "rotate-left",
+            "rotate-right",
+            "zoom-in",
+            "zoom-out",
+            "zoom-fit",
+            "zoom-actual",
+            "zoom-toggle",
+        ] {
             self.set_action_enabled(name, has_doc);
         }
         self.set_action_enabled("undo", undo);
@@ -963,13 +1112,20 @@ impl ScrawlWindow {
             .unwrap_or_else(|| if has_doc { "Untitled".into() } else { "Scrawl".into() });
         self.inner.title.set_title(&if dirty { format!("{name} — Edited") } else { name });
         self.inner.title.set_subtitle(&size.map(|r| format!("{} × {}", r.w, r.h)).unwrap_or_default());
-        self.inner.area.queue_draw();
+        // Undoing a crop or rotation changes the page size too.
+        self.update_content_size();
     }
 
     fn crop(&self) {
         if self.with_editor(Editor::apply_crop) == Some(true) {
             self.select_tool(Tool::Select);
-            self.update_content_size();
+        }
+        self.refresh();
+    }
+
+    fn rotate(&self, clockwise: bool) {
+        if let Some(Err(err)) = self.with_editor(|ed| ed.rotate_image(clockwise)) {
+            self.toast(&format!("Could not rotate: {err}"));
         }
         self.refresh();
     }
@@ -1090,7 +1246,6 @@ impl ScrawlWindow {
             if let Some(Err(err)) = result {
                 this.toast(&format!("Could not resize: {err}"));
             }
-            this.update_content_size();
             this.refresh();
         });
     }

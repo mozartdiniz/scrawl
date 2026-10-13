@@ -429,6 +429,43 @@ impl Editor {
         Ok(())
     }
 
+    /// Rotate Left / Rotate Right (Preview's ⌘L / ⌘R): turn the image a
+    /// quarter, losslessly. As in AnnotationKit's
+    /// `flattenModelExifOrientation:withModelSize:`, annotation geometry
+    /// and the crop go through the same transform as the pixels, and box
+    /// shapes count the turn so their content turns too.
+    pub fn rotate_image(&mut self, clockwise: bool) -> anyhow::Result<()> {
+        let before = self.snapshot();
+        let old = &self.doc.image;
+        let (w, h) = (old.width(), old.height());
+        let image = cairo::ImageSurface::create(cairo::Format::ARgb32, h, w)?;
+        {
+            let cr = cairo::Context::new(&image)?;
+            // Exact quarter-turn matrices (no trigonometry), so every pixel
+            // lands on a pixel.
+            let (w, h) = (w as f64, h as f64);
+            cr.transform(if clockwise {
+                cairo::Matrix::new(0.0, 1.0, -1.0, 0.0, h, 0.0)
+            } else {
+                cairo::Matrix::new(0.0, -1.0, 1.0, 0.0, 0.0, w)
+            });
+            let pattern = cairo::SurfacePattern::create(old);
+            pattern.set_filter(cairo::Filter::Nearest);
+            cr.set_source(&pattern)?;
+            cr.paint()?;
+        }
+        self.doc.image = image;
+
+        let (w, h) = (w as f64, h as f64);
+        self.doc.crop = self.doc.crop.quarter_turn(clockwise, w, h);
+        self.crop_selection = self.crop_selection.map(|r| r.quarter_turn(clockwise, w, h));
+        for a in &mut self.doc.annotations {
+            quarter_turn_annotation(a, clockwise, w, h);
+        }
+        self.commit(before);
+        Ok(())
+    }
+
     // ---- text editing ---------------------------------------------------
 
     pub fn start_text_edit(&mut self, id: u64) {
@@ -482,6 +519,9 @@ impl Editor {
         let offset = (self.doc.crop.w.min(self.doc.crop.h) * 0.02).max(8.0);
         copy.shape.translate(offset, offset);
         let id = self.add(copy.shape, copy.style);
+        if let Some(a) = self.annotation_mut(id) {
+            a.turns = copy.turns;
+        }
         self.selected = Some(id);
         self.commit(before);
     }
@@ -566,7 +606,7 @@ impl Editor {
     fn add(&mut self, shape: Shape, style: Style) -> u64 {
         let id = self.next_id;
         self.next_id += 1;
-        self.doc.annotations.push(Annotation { id, shape, style });
+        self.doc.annotations.push(Annotation { id, shape, style, turns: 0 });
         id
     }
 
@@ -634,6 +674,23 @@ fn normalize_angle(angle: f64) -> f64 {
     } else {
         a
     }
+}
+
+/// Move an annotation along with a quarter turn of a `w`×`h` image.
+fn quarter_turn_annotation(a: &mut Annotation, clockwise: bool, w: f64, h: f64) {
+    let Shape::Text { origin, text, rotation } = &mut a.shape else {
+        a.shape.quarter_turn(clockwise, w, h);
+        a.turns = (a.turns + if clockwise { 1 } else { 3 }) % 4;
+        return;
+    };
+    // A text box turns about its center: the center follows the image, the
+    // frame keeps its size, and the text gains a quarter of rotation.
+    let (frame, _) = render::text_frame(*origin, text, &a.style, *rotation);
+    let from = frame.center();
+    let to = from.quarter_turn(clockwise, w, h);
+    *origin = origin.offset(to.x - from.x, to.y - from.y);
+    let quarter = std::f64::consts::FRAC_PI_2;
+    *rotation = normalize_angle(*rotation + if clockwise { quarter } else { -quarter });
 }
 
 fn is_degenerate(a: &Annotation) -> bool {
@@ -740,7 +797,7 @@ pub fn hit_test(a: &Annotation, p: Point, tol: f64) -> bool {
         | Shape::Oval(_)
         | Shape::Bubble(_)
         | Shape::Star(_)
-        | Shape::Polygon(_) => render::outline_contains(&a.shape, a.style.fill.is_some(), p, band),
+        | Shape::Polygon(_) => render::outline_contains(a, p, band),
         Shape::Highlight(r) | Shape::Redact(r) => r.inflate(tol).contains(p),
         Shape::Line { start, end } => crate::model::distance_to_segment(p, *start, *end) <= band,
         Shape::Pen(points) => match points.as_slice() {
@@ -976,6 +1033,95 @@ mod tests {
         assert_eq!(ed.doc.image.width(), 400);
         assert_eq!(ed.doc.dpi, Some(300.0));
         assert!(ed.can_undo());
+    }
+
+    #[test]
+    fn rotating_turns_image_crop_and_annotations_undoably() {
+        let mut ed = editor();
+        draw(&mut ed, Tool::Bubble, Point::new(10.0, 20.0), Point::new(110.0, 80.0));
+        draw(&mut ed, Tool::Arrow, Point::new(0.0, 0.0), Point::new(40.0, 10.0));
+        draw(&mut ed, Tool::Crop, Point::new(0.0, 0.0), Point::new(200.0, 300.0));
+        ed.apply_crop();
+
+        ed.rotate_image(true).unwrap();
+        assert_eq!((ed.doc.image.width(), ed.doc.image.height()), (300, 400));
+        assert_eq!(ed.doc.crop, Rect::new(0.0, 0.0, 300.0, 200.0));
+        // The 100×60 bubble is now 60×100, and remembers the turn so its
+        // tail is drawn at the top-left instead of the bottom-left.
+        assert_eq!(ed.doc.annotations[0].shape, Shape::Bubble(Rect::new(220.0, 10.0, 60.0, 100.0)));
+        assert_eq!(ed.doc.annotations[0].turns, 1);
+        assert_eq!(
+            ed.doc.annotations[1].shape,
+            Shape::Line { start: Point::new(300.0, 0.0), end: Point::new(290.0, 40.0) }
+        );
+
+        ed.undo();
+        assert_eq!(ed.doc.image.width(), 400);
+        assert_eq!(ed.doc.annotations[0].turns, 0);
+        assert_eq!(ed.doc.crop, Rect::new(0.0, 0.0, 200.0, 300.0));
+    }
+
+    #[test]
+    fn four_quarter_turns_are_the_identity() {
+        let mut ed = editor();
+        draw(&mut ed, Tool::Star, Point::new(10.0, 20.0), Point::new(110.0, 80.0));
+        draw(&mut ed, Tool::Pen, Point::new(5.0, 5.0), Point::new(50.0, 70.0));
+        let id = add_text(&mut ed);
+        let original = ed.doc.annotations.clone();
+        let text_center = |ed: &Editor| {
+            let a = ed.doc.annotations.iter().find(|a| a.id == id).unwrap();
+            Rect::bounding(&render::text_corners(a).unwrap()).unwrap().center()
+        };
+        let center = text_center(&ed);
+
+        ed.rotate_image(false).unwrap();
+        // Counter-clockwise: the text's center follows the image, and the
+        // text itself now reads bottom-to-top.
+        assert!(text_center(&ed).distance(center.quarter_turn(false, 400.0, 300.0)) < 1e-9);
+        assert!((text_rotation_of(&ed, id) + std::f64::consts::FRAC_PI_2).abs() < 1e-9);
+
+        for _ in 0..3 {
+            ed.rotate_image(false).unwrap();
+        }
+        assert_eq!((ed.doc.image.width(), ed.doc.image.height()), (400, 300));
+        assert_eq!(ed.doc.annotations[..2], original[..2]);
+        assert!(text_center(&ed).distance(center) < 1e-9);
+        assert!(text_rotation_of(&ed, id).abs() < 1e-9);
+    }
+
+    #[test]
+    fn rotation_moves_pixels_exactly() {
+        let mut ed = editor();
+        {
+            // One red pixel at the top-left corner.
+            let cr = cairo::Context::new(&ed.doc.image).unwrap();
+            cr.set_source_rgb(1.0, 0.0, 0.0);
+            cr.rectangle(0.0, 0.0, 1.0, 1.0);
+            cr.fill().unwrap();
+        }
+        ed.rotate_image(true).unwrap();
+        // The undo stack shares the surface, so read a private copy.
+        let (w, h) = (ed.doc.image.width(), ed.doc.image.height());
+        let mut image = cairo::ImageSurface::create(cairo::Format::ARgb32, w, h).unwrap();
+        {
+            let cr = cairo::Context::new(&image).unwrap();
+            cr.set_source_surface(&ed.doc.image, 0.0, 0.0).unwrap();
+            cr.paint().unwrap();
+        }
+        let stride = image.stride() as usize;
+        let width = image.width() as usize;
+        let data = image.data().unwrap();
+        let pixel =
+            |x: usize, y: usize| u32::from_ne_bytes(data[y * stride + x * 4..][..4].try_into().unwrap());
+        assert_eq!(pixel(width - 1, 0), 0xffff0000, "top-left went top-right");
+        assert_eq!(pixel(0, 0), 0);
+    }
+
+    fn text_rotation_of(ed: &Editor, id: u64) -> f64 {
+        match ed.doc.annotations.iter().find(|a| a.id == id).map(|a| &a.shape) {
+            Some(Shape::Text { rotation, .. }) => *rotation,
+            _ => panic!("not text"),
+        }
     }
 
     #[test]

@@ -17,5 +17,9 @@
     <file preprocess="xml-stripblanks" alias="scrawl-star-symbolic.svg">icons/scalable/actions/scrawl-star-symbolic.svg</file>
     <file preprocess="xml-stripblanks" alias="scrawl-polygon-symbolic.svg">icons/scalable/actions/scrawl-polygon-symbolic.svg</file>
     <file preprocess="xml-stripblanks" alias="scrawl-resize-symbolic.svg">icons/scalable/actions/scrawl-resize-symbolic.svg</file>
+    <file preprocess="xml-stripblanks" alias="scrawl-rotate-left-symbolic.svg">icons/scalable/actions/scrawl-rotate-left-symbolic.svg</file>
+    <file preprocess="xml-stripblanks" alias="scrawl-rotate-right-symbolic.svg">icons/scalable/actions/scrawl-rotate-right-symbolic.svg</file>
+    <file preprocess="xml-stripblanks" alias="scrawl-zoom-in-symbolic.svg">icons/scalable/actions/scrawl-zoom-in-symbolic.svg</file>
+    <file preprocess="xml-stripblanks" alias="scrawl-zoom-out-symbolic.svg">icons/scalable/actions/scrawl-zoom-out-symbolic.svg</file>
   </gresource>
 </gresources>

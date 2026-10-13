@@ -37,7 +37,12 @@ data/         desktop file, metainfo, app icon, symbolic tool icons
 
 - **Live model, flatten on save**, like Preview. Crop is a rect in the
   model. The base image only changes on Adjust Size (resample), which
-  scales annotations along with it; undo snapshots hold the surface.
+  scales annotations along with it, and on Rotate Left/Right (lossless
+  quarter turn); undo snapshots hold the surface.
+- **Rotation follows AnnotationKit** (PREVIEW_RESEARCH.md §5): geometry and
+  crop go through the same transform as the pixels; box shapes also count
+  `Annotation::turns` and draw their content turned about the rect center,
+  so bubble tails and star points rotate with the image.
 - **Resample off = pixels locked**, only the resolution changes (Preview
   asserts the same). The resolution is read from and written to PNG/JPEG.
 - **Ctrl+S never silently overwrites the source image.** The first save

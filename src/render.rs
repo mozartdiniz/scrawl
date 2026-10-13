@@ -79,7 +79,7 @@ fn draw_shape(cr: &cairo::Context, a: &Annotation, tint: Option<Color>) {
         | Shape::Bubble(_)
         | Shape::Star(_)
         | Shape::Polygon(_) => {
-            outline_path(cr, &a.shape);
+            outline_path(cr, &a.shape, a.turns);
             fill_and_stroke(cr, fill, stroke);
         }
         Shape::Highlight(r) => {
@@ -128,8 +128,28 @@ fn fill_and_stroke(cr: &cairo::Context, fill: Option<Color>, stroke: Color) {
 }
 
 /// Build the outline of a closed shape. Shared by drawing and hit testing.
-fn outline_path(cr: &cairo::Context, shape: &Shape) {
+///
+/// After `turns` quarter turns of the image the shape is laid out in its
+/// rect as it was before them, then turned about the center — what
+/// AnnotationKit's `adjustModelToCompensateForOriginalExif` does — so a
+/// bubble's tail follows the image instead of snapping back to the bottom.
+fn outline_path(cr: &cairo::Context, shape: &Shape, turns: u8) {
     use std::f64::consts::{FRAC_PI_2, PI, TAU};
+    let turns = turns % 4;
+    if let (Some(r), true) = (shape.rect(), turns != 0) {
+        let mut upright = shape.clone();
+        if let Some(rect) = upright.rect_mut() {
+            *rect = if turns % 2 == 1 { r.transposed() } else { r };
+        }
+        let c = r.center();
+        cr.save().ok();
+        cr.translate(c.x, c.y);
+        cr.rotate(turns as f64 * FRAC_PI_2);
+        cr.translate(-c.x, -c.y);
+        outline_path(cr, &upright, 0);
+        cr.restore().ok();
+        return;
+    }
     match shape {
         Shape::Rectangle(r) => cr.rectangle(r.x, r.y, r.w, r.h),
         Shape::Oval(r) => ellipse_path(cr, r),
@@ -209,13 +229,14 @@ fn polygon_path(cr: &cairo::Context, unit: &[(f64, f64)], r: &Rect) {
 
 /// Whether `p` is on a closed shape's outline (within `band`) or, when
 /// filled, inside it. Uses cairo's own geometry so it matches the drawing.
-pub fn outline_contains(shape: &Shape, filled: bool, p: Point, band: f64) -> bool {
+pub fn outline_contains(a: &Annotation, p: Point, band: f64) -> bool {
     let Ok(cr) =
         cairo::ImageSurface::create(cairo::Format::ARgb32, 1, 1).and_then(|s| cairo::Context::new(&s))
     else {
         return false;
     };
-    outline_path(&cr, shape);
+    let filled = a.style.fill.is_some();
+    outline_path(&cr, &a.shape, a.turns);
     cr.set_line_width(band * 2.0);
     cr.set_line_join(cairo::LineJoin::Round);
     cr.in_stroke(p.x, p.y).unwrap_or(false) || (filled && cr.in_fill(p.x, p.y).unwrap_or(false))
@@ -441,7 +462,7 @@ mod tests {
             ),
         ];
         for (id, (shape, style)) in shapes.into_iter().enumerate() {
-            doc.annotations.push(Annotation { id: id as u64, shape, style });
+            doc.annotations.push(Annotation { id: id as u64, shape, style, turns: 0 });
         }
         doc
     }
