@@ -23,6 +23,13 @@ Built with Rust, GTK 4 and libadwaita.
 - **Editing:** move, resize and duplicate annotations, bring to front or
   send to back, and undo/redo.
 - **Crop:** stays adjustable until you save.
+- **Rotate:** turn the image left or right without losing quality. Your
+  annotations turn with it, just like in Preview: arrows keep pointing at
+  the same thing, and a speech bubble's tail or a star's points rotate along
+  with the picture.
+- **Zoom:** zoom buttons and the current level in the header bar. Click the
+  level to switch between actual size and fit to window. Ctrl+scroll and
+  touchpad pinch zoom around the pointer.
 - **Adjust Size:** Fit into presets, pixels, per cent, inches, cm, mm or
   points, plus resolution, scale proportionally and resample. The resolution
   is kept in PNG and JPEG metadata.
@@ -105,10 +112,13 @@ flatpak-builder --user --install --force-clean build-flatpak io.github.mozartdin
 | Delete, arrow keys | Delete or nudge the selection (Shift: 10 px) |
 | Ctrl+Z, Ctrl+Shift+Z | Undo, redo |
 | Ctrl+K | Crop to the selection |
+| Ctrl+L, Ctrl+R | Rotate left, rotate right |
 | Ctrl+D, Ctrl+Shift+F, Ctrl+Shift+B | Duplicate, bring to front, send to back |
 | Ctrl+C, Ctrl+V | Copy the annotated image, new image from the clipboard |
 | Ctrl+S, Ctrl+Shift+S | Save, save as |
-| Ctrl+scroll, Ctrl+0, Ctrl+1 | Zoom, fit to window, actual size |
+| Ctrl+scroll, pinch | Zoom around the pointer |
+| Ctrl+plus, Ctrl+minus | Zoom in, zoom out |
+| Ctrl+0, Ctrl+1 | Fit to window, actual size |
 
 ## Development
 
